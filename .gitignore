@@ -5,3 +5,7 @@ obj/
 *.db
 *.db-shm
 *.db-wal
+
+src/MiniERP.Api/clientapp/node_modules/
+src/MiniERP.Api/clientapp/dist/
+**/node_modules/

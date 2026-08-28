@@ -59,6 +59,10 @@ using (var scope = app.Services.CreateScope())
     await SeedData.SeedAsync(db);
 }
 
+// SPA React (client-side) phục vụ tĩnh từ wwwroot; tài liệu API Scalar giữ ở /scalar.
+app.UseDefaultFiles();
+app.UseStaticFiles();
+
 // OpenAPI + Scalar UI: bật mọi môi trường để demo được trên cloud (API demo, không dữ liệu thật).
 app.MapOpenApi();
 app.MapScalarApiReference();
@@ -74,7 +78,7 @@ app.MapInventoryEndpoints();
 app.MapInvoiceEndpoints();
 app.MapReportEndpoints();
 
-app.MapGet("/", () => Results.Redirect("/scalar/v1")).AllowAnonymous();   // landing → OpenAPI UI
+app.MapGet("/", () => Results.Redirect("/index.html")).AllowAnonymous();   // landing → SPA React (Scalar ở /scalar/v1)
 app.MapGet("/health", () => Results.Ok(new { status = "ok" })).AllowAnonymous();
 
 app.Run();

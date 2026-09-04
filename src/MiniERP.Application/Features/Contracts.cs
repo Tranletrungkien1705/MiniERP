@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using MiniERP.Application.Abstractions;
 using MiniERP.Application.Cqrs;
+using MiniERP.Application.Features.Partners;
 using MiniERP.Domain.Entities;
 using MiniERP.Domain.Enums;
 
@@ -59,6 +60,39 @@ public sealed class ApproveContractA2Handler(IAppDbContext db) : ICommandHandler
         contract.ApproveA2();
         await db.SaveChangesAsync(ct);
         return Mapper.ToDto(contract);
+    }
+}
+
+// Import hàng loạt từ Dlr_Contract thật (2010.HTC) — dealer/bank resolve theo Code có sẵn trong Partners (phải import Partners trước).
+// Trạng thái nguồn (DlrCtrStatus A/C/F/P) không đủ tài liệu để suy diễn an toàn sang state machine Draft->DealerSigned->ApprovedA1->ApprovedA2,
+// nên import giữ nguyên Draft (đúng luật chống bịa nghiệp vụ) — chỉ ContractNo/Dealer/Bank/ContractValue là dữ liệu thật.
+public sealed record ImportContractRow(string? ContractNo, string? DealerCode, string? BankCode, decimal ContractValue);
+public sealed record ImportContractsCommand(IReadOnlyList<ImportContractRow> Rows) : ICommand<ImportResultDto>;
+
+public sealed class ImportContractsHandler(IAppDbContext db) : ICommandHandler<ImportContractsCommand, ImportResultDto>
+{
+    public async Task<ImportResultDto> Handle(ImportContractsCommand command, CancellationToken ct)
+    {
+        var partnersByCode = await db.Partners.AsNoTracking()
+            .ToDictionaryAsync(p => p.Code, p => p.Id, StringComparer.OrdinalIgnoreCase, ct);
+        var existingNos = new HashSet<string>(
+            await db.Contracts.AsNoTracking().Select(c => c.ContractNo).ToListAsync(ct),
+            StringComparer.OrdinalIgnoreCase);
+
+        int added = 0, skipped = 0;
+        foreach (var row in command.Rows)
+        {
+            if (string.IsNullOrWhiteSpace(row.ContractNo) || string.IsNullOrWhiteSpace(row.DealerCode) || string.IsNullOrWhiteSpace(row.BankCode)
+                || row.ContractValue <= 0)
+            { skipped++; continue; }
+            if (!existingNos.Add(row.ContractNo.Trim())) { skipped++; continue; }
+            if (!partnersByCode.TryGetValue(row.DealerCode.Trim(), out var dealerId)) { skipped++; continue; }
+            if (!partnersByCode.TryGetValue(row.BankCode.Trim(), out var bankId)) { skipped++; continue; }
+            db.Contracts.Add(DealerContract.Create(row.ContractNo.Trim(), dealerId, bankId, row.ContractValue));
+            added++;
+        }
+        await db.SaveChangesAsync(ct);
+        return new ImportResultDto(added, skipped, command.Rows.Count);
     }
 }
 

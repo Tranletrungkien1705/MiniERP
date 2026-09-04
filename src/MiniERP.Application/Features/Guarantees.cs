@@ -20,6 +20,9 @@ public sealed class ImportGuaranteesHandler(IAppDbContext db) : ICommandHandler<
         var contractIdByDealerBank = (await db.Contracts.AsNoTracking().Select(c => new { c.Id, c.DealerId, c.BankId }).ToListAsync(ct))
             .GroupBy(c => (c.DealerId, c.BankId))
             .ToDictionary(g => g.Key, g => g.First().Id);
+        // Entity không có mã tự nhiên (GuaranteeNo) — dedupe theo tổ hợp ContractId+Amount+IssueDate+ExpiryDate để import lại không nhân đôi.
+        var existingGuarantees = await db.Guarantees.AsNoTracking().Select(g => new { g.ContractId, g.Amount, g.IssueDate, g.ExpiryDate }).ToListAsync(ct);
+        var existingKeys = new HashSet<(Guid, decimal, DateOnly, DateOnly)>(existingGuarantees.Select(g => (g.ContractId, g.Amount, g.IssueDate, g.ExpiryDate)));
 
         int added = 0, skipped = 0;
         foreach (var row in command.Rows)
@@ -29,6 +32,8 @@ public sealed class ImportGuaranteesHandler(IAppDbContext db) : ICommandHandler<
             if (!partnersByCode.TryGetValue(row.DealerCode.Trim(), out var dealerId)) { skipped++; continue; }
             if (!partnersByCode.TryGetValue(row.BankCode.Trim(), out var bankId)) { skipped++; continue; }
             if (!contractIdByDealerBank.TryGetValue((dealerId, bankId), out var contractId)) { skipped++; continue; }
+            var key = (contractId, row.Amount, row.IssueDate, row.ExpiryDate);
+            if (!existingKeys.Add(key)) { skipped++; continue; }
             db.Guarantees.Add(Guarantee.Issue(contractId, bankId, row.Amount, row.IssueDate, row.ExpiryDate));
             added++;
         }

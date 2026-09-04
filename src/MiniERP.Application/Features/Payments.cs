@@ -21,6 +21,9 @@ public sealed class ImportPaymentsHandler(IAppDbContext db) : ICommandHandler<Im
         var contractIdByDealerBank = (await db.Contracts.AsNoTracking().Select(c => new { c.Id, c.DealerId, c.BankId }).ToListAsync(ct))
             .GroupBy(c => (c.DealerId, c.BankId))
             .ToDictionary(g => g.Key, g => g.First().Id);
+        // Entity không có mã tự nhiên — dedupe theo tổ hợp ContractId+Amount+PaidDate để import lại không nhân đôi.
+        var existingPayments = await db.Payments.AsNoTracking().Select(p => new { p.ContractId, p.Amount, p.PaidDate }).ToListAsync(ct);
+        var existingKeys = new HashSet<(Guid, decimal, DateOnly)>(existingPayments.Select(p => (p.ContractId, p.Amount, p.PaidDate)));
 
         int added = 0, skipped = 0;
         foreach (var row in command.Rows)
@@ -30,6 +33,8 @@ public sealed class ImportPaymentsHandler(IAppDbContext db) : ICommandHandler<Im
             if (!partnersByCode.TryGetValue(row.DealerCode.Trim(), out var dealerId)) { skipped++; continue; }
             if (!partnersByCode.TryGetValue(row.BankCode.Trim(), out var bankId)) { skipped++; continue; }
             if (!contractIdByDealerBank.TryGetValue((dealerId, bankId), out var contractId)) { skipped++; continue; }
+            var key = (contractId, row.Amount, row.PaidDate);
+            if (!existingKeys.Add(key)) { skipped++; continue; }
             db.Payments.Add(Payment.Record(contractId, PaymentType.Deposit, row.Amount, row.PaidDate));
             added++;
         }

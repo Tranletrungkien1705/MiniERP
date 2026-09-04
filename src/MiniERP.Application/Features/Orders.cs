@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using MiniERP.Application.Abstractions;
 using MiniERP.Application.Cqrs;
+using MiniERP.Application.Features.Partners;
 using MiniERP.Domain.Entities;
 using MiniERP.Domain.Enums;
 
@@ -104,6 +105,50 @@ public sealed class GetOrderByIdHandler(IAppDbContext db) : IQueryHandler<GetOrd
         var order = await db.Orders.AsNoTracking().Include(o => o.Lines)
             .FirstOrDefaultAsync(o => o.Id == query.OrderId, ct);
         return order is null ? null : Mapper.ToDto(order);
+    }
+}
+
+// Import hàng loạt từ DLS_Deal (header) + dòng xe (Model/Spec/Color qua Car_Car) — resolve Dealer/Contract/Product theo Code, giữ Status=Demand (trạng thái tạo tự nhiên).
+public sealed record ImportOrderLine(string? ModelCode, string? SpecCode, string? ColorCode, int DemandQty);
+public sealed record ImportOrderRow(string? OrderNo, string? DealerCode, string? ContractNo, IReadOnlyList<ImportOrderLine> Lines);
+public sealed record ImportOrdersCommand(IReadOnlyList<ImportOrderRow> Rows) : ICommand<ImportResultDto>;
+
+public sealed class ImportOrdersHandler(IAppDbContext db) : ICommandHandler<ImportOrdersCommand, ImportResultDto>
+{
+    public async Task<ImportResultDto> Handle(ImportOrdersCommand command, CancellationToken ct)
+    {
+        var partnersByCode = await db.Partners.AsNoTracking().ToDictionaryAsync(p => p.Code, p => p.Id, StringComparer.OrdinalIgnoreCase, ct);
+        var contractsByNo = await db.Contracts.AsNoTracking().ToDictionaryAsync(c => c.ContractNo, c => c.Id, StringComparer.OrdinalIgnoreCase, ct);
+        var productsByKey = (await db.Products.AsNoTracking().ToListAsync(ct))
+            .GroupBy(p => $"{p.ModelCode}|{p.SpecCode}|{p.ColorCode}", StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First().Id, StringComparer.OrdinalIgnoreCase);
+        var existingNos = new HashSet<string>(await db.Orders.AsNoTracking().Select(o => o.OrderNo).ToListAsync(ct), StringComparer.OrdinalIgnoreCase);
+
+        int added = 0, skipped = 0;
+        foreach (var row in command.Rows)
+        {
+            if (string.IsNullOrWhiteSpace(row.OrderNo) || string.IsNullOrWhiteSpace(row.DealerCode) || string.IsNullOrWhiteSpace(row.ContractNo)
+                || row.Lines is null || row.Lines.Count == 0)
+            { skipped++; continue; }
+            if (!existingNos.Add(row.OrderNo.Trim())) { skipped++; continue; }
+            if (!partnersByCode.TryGetValue(row.DealerCode.Trim(), out var dealerId)) { skipped++; continue; }
+            if (!contractsByNo.TryGetValue(row.ContractNo.Trim(), out var contractId)) { skipped++; continue; }
+
+            var order = SalesOrder.Create(row.OrderNo.Trim(), dealerId, contractId);
+            var anyLine = false;
+            foreach (var line in row.Lines)
+            {
+                var key = $"{line.ModelCode}|{line.SpecCode}|{line.ColorCode}";
+                if (!productsByKey.TryGetValue(key, out var productId) || line.DemandQty <= 0) continue;
+                order.AddDemand(productId, line.DemandQty);
+                anyLine = true;
+            }
+            if (!anyLine) { skipped++; continue; }
+            db.Orders.Add(order);
+            added++;
+        }
+        await db.SaveChangesAsync(ct);
+        return new ImportResultDto(added, skipped, command.Rows.Count);
     }
 }
 

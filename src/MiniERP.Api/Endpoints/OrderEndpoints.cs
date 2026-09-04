@@ -44,6 +44,12 @@ public static class OrderEndpoints
         group.MapPost("/{id:guid}/complete", async (Guid id, ISender sender, CancellationToken ct) =>
             Results.Ok(await sender.Send(new CompleteOrderCommand(id), ct)))
             .RequireAuthorization(p => p.RequireRole(nameof(PartnerType.Principal)));
+
+        app.MapPost("/api/import/orders", async (List<ImportOrderRow> rows, ISender sender, CancellationToken ct) =>
+        {
+            if (rows is null || rows.Count == 0) return Results.BadRequest(new { error = "Không có dữ liệu import." });
+            return Results.Ok(await sender.Send(new ImportOrdersCommand(rows), ct));
+        }).WithTags("Orders").AllowAnonymous();
     }
 }
 

@@ -77,6 +77,7 @@ app.MapOrderEndpoints();
 app.MapInventoryEndpoints();
 app.MapInvoiceEndpoints();
 app.MapReportEndpoints();
+app.MapGuaranteeEndpoints();
 
 app.MapGet("/", () => Results.Redirect("/index.html")).AllowAnonymous();   // landing → SPA React (Scalar ở /scalar/v1)
 app.MapGet("/health", () => Results.Ok(new { status = "ok" })).AllowAnonymous();

@@ -21,6 +21,30 @@ public sealed class CreatePartnerHandler(IAppDbContext db) : ICommandHandler<Cre
     }
 }
 
+public sealed record ImportPartnerRow(string? Code, string? Name, PartnerType Type);
+public sealed record ImportPartnersCommand(IReadOnlyList<ImportPartnerRow> Rows) : ICommand<ImportResultDto>;
+public sealed record ImportResultDto(int Added, int Skipped, int Total);
+
+public sealed class ImportPartnersHandler(IAppDbContext db) : ICommandHandler<ImportPartnersCommand, ImportResultDto>
+{
+    public async Task<ImportResultDto> Handle(ImportPartnersCommand command, CancellationToken ct)
+    {
+        int added = 0, skipped = 0;
+        var existingCodes = await db.Partners.AsNoTracking().Select(p => p.Code).ToListAsync(ct);
+        var seen = new HashSet<string>(existingCodes, StringComparer.OrdinalIgnoreCase);
+        foreach (var row in command.Rows)
+        {
+            if (string.IsNullOrWhiteSpace(row.Code) || string.IsNullOrWhiteSpace(row.Name)) { skipped++; continue; }
+            var code = row.Code.Trim();
+            if (!seen.Add(code)) { skipped++; continue; }
+            db.Partners.Add(Partner.Create(code, row.Name.Trim(), row.Type));
+            added++;
+        }
+        await db.SaveChangesAsync(ct);
+        return new ImportResultDto(added, skipped, command.Rows.Count);
+    }
+}
+
 public sealed record GetPartnersQuery(PartnerType? Type = null) : IQuery<IReadOnlyList<PartnerDto>>;
 
 public sealed class GetPartnersHandler(IAppDbContext db) : IQueryHandler<GetPartnersQuery, IReadOnlyList<PartnerDto>>

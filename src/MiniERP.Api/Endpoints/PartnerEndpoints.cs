@@ -18,5 +18,13 @@ public static class PartnerEndpoints
             var result = await sender.Send(command, ct);
             return Results.Created($"/api/partners/{result.Id}", result);
         }).RequireAuthorization(p => p.RequireRole(nameof(PartnerType.Principal)));
+
+        // Import hàng loạt từ nguồn dữ liệu thật (Mst_Dealer...) — không yêu cầu JWT, cùng convention với các app _labs khác.
+        app.MapPost("/api/import/partners", async (List<ImportPartnerRow> rows, ISender sender, CancellationToken ct) =>
+        {
+            if (rows is null || rows.Count == 0) return Results.BadRequest(new { error = "Không có dữ liệu import." });
+            var result = await sender.Send(new ImportPartnersCommand(rows), ct);
+            return Results.Ok(result);
+        }).WithTags("Partners").AllowAnonymous();
     }
 }
